@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 :: ============================================================
-::  javaswitch.bat — Java Version Switcher  v1.3
+::  javaswitch.cmd - Java Version Switcher  v1.5
 ::  Place in C:\Windows\System32\
 :: ============================================================
 
@@ -10,10 +10,10 @@ title Java Version Switcher
 
 set COUNT=0
 
-:: ────────────────────────────────────────────────────────────
+:: ------------------------------------------------------------
 ::  SCAN FOR INSTALLED JDK / JRE
 ::  Add your own paths at the bottom of this block if needed
-:: ────────────────────────────────────────────────────────────
+:: ------------------------------------------------------------
 
 call :SCAN "C:\Program Files\Java"
 call :SCAN "C:\Program Files\Eclipse Adoptium"
@@ -49,14 +49,47 @@ for /d %%D in ("%ROOT%\*") do (
 )
 exit /b
 
-:: ────────────────────────────────────────────────────────────
+:: Show the currently active java (called from MENU).
+:SHOW_ACTIVE
+for /f "tokens=*" %%V in ('java -version 2^>^&1 ^| findstr /i "version"') do echo    %%V
+for /f "tokens=*" %%P in ('where java 2^>nul') do echo    Path: %%P
+exit /b
+
+:: Returns errorlevel 0 if the given PATH segment looks like a Java install,
+:: 1 otherwise. One /c: per findstr at top level -> reliable errorlevel,
+:: no fragile multiple-/c: and no pipe-in-block.
+:ISJAVABIN
+set "_seg=%~1"
+echo !_seg!| findstr /i /c:"\java\"     >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"\jdk"       >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"\jre"       >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"adoptium"   >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"corretto"   >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"zulu"       >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"bellsoft"   >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"semeru"     >nul 2>&1 && exit /b 0
+echo !_seg!| findstr /i /c:"sapmachine" >nul 2>&1 && exit /b 0
+exit /b 1
+
+:: Notify running processes that the environment changed so new windows
+:: pick up the change (reg add, unlike setx, does not broadcast on its own).
+:BROADCAST
+powershell -NoProfile -Command ^
+  "$sig='[DllImport(\"user32.dll\")]public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,string l,uint f,uint t,out UIntPtr r);';" ^
+  "$t=Add-Type -MemberDefinition $sig -Name WinAPI -Namespace Env -PassThru;" ^
+  "$r=[UIntPtr]::Zero;" ^
+  "$t::SendMessageTimeout([IntPtr]0xffff,0x001A,[UIntPtr]::Zero,'Environment',2,5000,[ref]$r)|Out-Null" ^
+  >nul 2>&1
+exit /b
+
+:: ------------------------------------------------------------
 ::  MAIN MENU
-:: ────────────────────────────────────────────────────────────
+:: ------------------------------------------------------------
 :MENU
 cls
 echo.
 echo  +======================================================+
-echo  ^|           Java Version Switcher  v1.3               ^|
+echo  ^|           Java Version Switcher  v1.5               ^|
 echo  +======================================================+
 echo.
 
@@ -70,11 +103,10 @@ if %COUNT%==0 (
 
 echo  Active Java:
 where java >nul 2>&1
-if %errorLevel%==0 (
-    for /f "tokens=*" %%V in ('java -version 2^>^&1 ^| findstr /i "version"') do echo    %%V
-    for /f "tokens=*" %%P in ('where java 2^>nul') do echo    Path: %%P
-) else (
+if errorlevel 1 (
     echo    [not configured]
+) else (
+    call :SHOW_ACTIVE
 )
 
 echo.
@@ -99,40 +131,40 @@ if "%CHOICE%"=="0" ( echo. & echo  Bye. & exit /b 0 )
 
 set VALID=0
 for /l %%I in (1,1,%COUNT%) do if "%CHOICE%"=="%%I" set VALID=1
-if "%VALID%"=="0" ( echo  [!] Enter a number from 0 to %COUNT%. & goto ASK_JAVA )
+if "%VALID%"=="0" ( echo  [X] Enter a number from 0 to %COUNT%. & goto ASK_JAVA )
 
 set "NEW_JAVA_HOME=!JAVA_PATH_%CHOICE%!"
 set "NEW_JAVA_BIN=!NEW_JAVA_HOME!\bin"
 
-:: ────────────────────────────────────────────────────────────
+:: ------------------------------------------------------------
 ::  SELECT SCOPE
-:: ────────────────────────────────────────────────────────────
+:: ------------------------------------------------------------
 echo.
 echo  +------------------------------------------------------+
 echo  ^|  Apply change to:                                    ^|
 echo  ^|                                                      ^|
-echo  ^|   [1] This window  — instant, runs a helper script  ^|
-echo  ^|   [2] Current user — new windows, no admin needed   ^|
-echo  ^|   [3] System-wide  — new windows, admin required    ^|
+echo  ^|   [1] This window  - instant, command copied to     ^|
+echo  ^|       clipboard ^(just paste and press Enter^)         ^|
+echo  ^|   [2] System-wide  - new windows, admin required    ^|
 echo  ^|   [0] Cancel                                        ^|
 echo  +------------------------------------------------------+
 echo.
 
 :ASK_SCOPE
-set /p "SCOPE= Your choice [0-3]: "
+set /p "SCOPE= Your choice [0-2]: "
 
 if "%SCOPE%"=="0" ( echo. & echo  Cancelled. & exit /b 0 )
 if "%SCOPE%"=="1" goto APPLY_WINDOW
-if "%SCOPE%"=="2" goto APPLY_USER
-if "%SCOPE%"=="3" goto APPLY_SYSTEM
-echo  [!] Enter 0, 1, 2 or 3.
+if "%SCOPE%"=="2" goto APPLY_SYSTEM
+echo  [X] Enter 0, 1 or 2.
 goto ASK_SCOPE
 
-:: ────────────────────────────────────────────────────────────
-::  [1] THIS WINDOW — writes a helper .bat, user runs it
-::      Why: `set` in a child process cannot modify the parent
-::      CMD. The helper is run with `call` which shares env.
-:: ────────────────────────────────────────────────────────────
+:: ------------------------------------------------------------
+::  [1] THIS WINDOW - writes a helper .bat, copies the command
+::      to the clipboard. Why a helper: `set` in a child process
+::      cannot modify the parent CMD; the helper run with `call`
+::      shares the parent environment.
+:: ------------------------------------------------------------
 :APPLY_WINDOW
 set "HELPER=%TEMP%\javaswitch_env.bat"
 
@@ -140,9 +172,11 @@ set "HELPER=%TEMP%\javaswitch_env.bat"
 set "CLEAN_PATH="
 for %%S in ("!PATH:;=" "!") do (
     set "SEG=%%~S"
-    echo !SEG! | findstr /i /c:"\Java\" /c:"\jdk" /c:"\jre" /c:"Adoptium" /c:"Corretto" /c:"Zulu" /c:"BellSoft" /c:"Semeru" /c:"SapMachine" >nul 2>&1
-    if !errorLevel! neq 0 (
-        if defined CLEAN_PATH (set "CLEAN_PATH=!CLEAN_PATH!;!SEG!") else (set "CLEAN_PATH=!SEG!")
+    if defined SEG (
+        call :ISJAVABIN "!SEG!"
+        if errorlevel 1 (
+            if defined CLEAN_PATH (set "CLEAN_PATH=!CLEAN_PATH!;!SEG!") else (set "CLEAN_PATH=!SEG!")
+        )
     )
 )
 
@@ -157,55 +191,23 @@ for %%S in ("!PATH:;=" "!") do (
     echo java -version
 ) > "!HELPER!"
 
+:: Copy the ready-to-run command to the clipboard
+echo call "!HELPER!"| clip 2>nul
+
 echo.
-echo  Helper script written. To apply in THIS window, run:
+echo  Helper script written and the command is now in your clipboard:
 echo.
 echo    call "%HELPER%"
 echo.
-echo  Paste that line into your CMD and press Enter.
-echo  The change will be instant and limited to that window.
+echo  Switch to your CMD window, paste ^(Ctrl+V^) and press Enter.
+echo  The change is instant and limited to that window.
 echo.
 pause & exit /b 0
 
-:: ────────────────────────────────────────────────────────────
-::  [2] CURRENT USER — setx to HKCU, no admin needed
+:: ------------------------------------------------------------
+::  [2] SYSTEM-WIDE - registry HKLM, admin required
 ::      Takes effect in all NEW CMD/PowerShell windows.
-:: ────────────────────────────────────────────────────────────
-:APPLY_USER
-echo.
-echo  Applying [current user]:
-echo    !JAVA_VER_%CHOICE%!
-echo    !NEW_JAVA_HOME!
-echo.
-
-:: Read current user PATH from registry
-for /f "skip=2 tokens=2*" %%A in (
-    'reg query "HKCU\Environment" /v Path 2^>nul'
-) do set "USR_PATH=%%B"
-
-:: Strip old java entries
-set "CLEAN_PATH="
-for %%S in ("!USR_PATH:;=" "!") do (
-    set "SEG=%%~S"
-    echo !SEG! | findstr /i /c:"\Java\" /c:"\jdk" /c:"\jre" /c:"Adoptium" /c:"Corretto" /c:"Zulu" /c:"BellSoft" /c:"Semeru" /c:"SapMachine" >nul 2>&1
-    if !errorLevel! neq 0 (
-        if defined CLEAN_PATH (set "CLEAN_PATH=!CLEAN_PATH!;!SEG!") else (set "CLEAN_PATH=!SEG!")
-    )
-)
-
-setx JAVA_HOME "!NEW_JAVA_HOME!" >nul
-setx PATH "!NEW_JAVA_BIN!;!CLEAN_PATH!" >nul
-
-echo  JAVA_HOME = !NEW_JAVA_HOME!
-echo.
-echo  Done. Open a NEW CMD window and verify with: java -version
-echo.
-pause & exit /b 0
-
-:: ────────────────────────────────────────────────────────────
-::  [3] SYSTEM-WIDE — registry HKLM, admin required
-::      Takes effect in all NEW CMD/PowerShell windows.
-:: ────────────────────────────────────────────────────────────
+:: ------------------------------------------------------------
 :APPLY_SYSTEM
 net session >nul 2>&1
 if %errorLevel% neq 0 (
@@ -225,6 +227,7 @@ echo.
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" ^
     /v "JAVA_HOME" /t REG_EXPAND_SZ /d "!NEW_JAVA_HOME!" /f >nul
 
+set "SYS_PATH="
 for /f "skip=2 tokens=2*" %%A in (
     'reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul'
 ) do set "SYS_PATH=%%B"
@@ -232,21 +235,23 @@ for /f "skip=2 tokens=2*" %%A in (
 set "CLEAN_PATH="
 for %%S in ("!SYS_PATH:;=" "!") do (
     set "SEG=%%~S"
-    echo !SEG! | findstr /i /c:"\Java\" /c:"\jdk" /c:"\jre" /c:"Adoptium" /c:"Corretto" /c:"Zulu" /c:"BellSoft" /c:"Semeru" /c:"SapMachine" >nul 2>&1
-    if !errorLevel! neq 0 (
-        if defined CLEAN_PATH (set "CLEAN_PATH=!CLEAN_PATH!;!SEG!") else (set "CLEAN_PATH=!SEG!")
+    if defined SEG (
+        call :ISJAVABIN "!SEG!"
+        if errorlevel 1 (
+            if defined CLEAN_PATH (set "CLEAN_PATH=!CLEAN_PATH!;!SEG!") else (set "CLEAN_PATH=!SEG!")
+        )
     )
 )
 
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" ^
-    /v "Path" /t REG_EXPAND_SZ /d "!NEW_JAVA_BIN!;!CLEAN_PATH!" /f >nul
+if defined CLEAN_PATH (
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" ^
+        /v "Path" /t REG_EXPAND_SZ /d "!NEW_JAVA_BIN!;!CLEAN_PATH!" /f >nul
+) else (
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" ^
+        /v "Path" /t REG_EXPAND_SZ /d "!NEW_JAVA_BIN!" /f >nul
+)
 
-powershell -NoProfile -Command ^
-  "$sig='[DllImport(\"user32.dll\")]public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,string l,uint f,uint t,out UIntPtr r);';" ^
-  "$t=Add-Type -MemberDefinition $sig -Name WinAPI -Namespace Env -PassThru;" ^
-  "$r=[UIntPtr]::Zero;" ^
-  "$t::SendMessageTimeout([IntPtr]0xffff,0x001A,[UIntPtr]::Zero,'Environment',2,5000,[ref]$r)|Out-Null" ^
-  >nul 2>&1
+call :BROADCAST
 
 echo  JAVA_HOME = !NEW_JAVA_HOME!
 echo.
